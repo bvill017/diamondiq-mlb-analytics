@@ -42,3 +42,16 @@ def calculate_barrel_rate(data):
     ) * 100
 
     return barrel_rate
+
+def calculate_difference(player_value, league_average):
+    return player_value - league_average
+
+def classify_metric(player_value, league_average):
+    difference = player_value - league_average
+
+    if difference > 0:
+        return "Above Average"
+    elif difference < 0:
+        return "Below Average"
+    else:
+        return "League Average"
