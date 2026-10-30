@@ -1,3 +1,4 @@
+from multiprocessing import Process, Queue, freeze_support
 import time
 import pandas as pd
 from pathlib import Path
@@ -53,6 +54,65 @@ def get_cache_path(start_date, end_date):
 
     return cache_file
 
+def statcast_worker(
+        start_date,
+        end_date,
+        result_queue
+):
+    try:
+        data=statcast(
+            start_date,
+            end_date
+        )
+
+        result_queue.put(
+            ("success", data)
+        )
+
+    except Exception as error:
+        result_queue.put(
+            ("error", str(error))
+        )
+
+def statcast_with_timeout(
+        start_date,
+        end_date,
+        timeout_seconds=300
+):
+    result_queue = Queue()
+
+    process = Process(
+        target=statcast_worker,
+        args=(
+            start_date,
+            end_date,
+            result_queue
+        )
+    )
+
+    process.start()
+
+    process.join(timeout_seconds)
+
+    if process.is_alive():
+        process.terminate()
+        process.join()
+
+        raise TimeoutError(
+            f"Statcast request timed out after "
+            f"{timeout_seconds} seconds."
+        )
+
+    if result_queue.empty():
+        raise RuntimeError(
+            "Statcast process ended without returning data."
+        )
+
+    status, result = result_queue.get()
+
+    if status == "error":
+        raise RuntimeError(result)
+
 def download_statcast_in_chunks(start_date, end_date):
     start = datetime.strptime(start_date, "%Y-%m-%d")
     end = datetime.strptime(end_date, "%Y-%m-%d")
@@ -89,7 +149,7 @@ def download_statcast_in_chunks(start_date, end_date):
 
             for attempt in range (1, 4):
                 try:
-                    chunk_data = statcast(
+                    chunk_data = statcast_with_timeout(
                         chunk_start,
                         chunk_end
                     )
@@ -184,22 +244,19 @@ def generate_hitter_report(
         end_date
     )
 
-    if league_hard_hit_rate is None:
-        print(
-            "\nMLB benchmark unavailable. "
-            "Player report will continue without comparison."
+    if league_hard_hit_rate is not None:
+        hard_hit_difference = calculate_difference(
+            hard_hit_rate,
+            league_hard_hit_rate
         )
-        return
 
-    hard_hit_difference = calculate_difference(
-        hard_hit_rate,
-        league_hard_hit_rate
-    )
-
-    hard_hit_rating = classify_metric(
-        hard_hit_rate,
-        league_hard_hit_rate
-    )
+        hard_hit_rating = classify_metric(
+                hard_hit_rate,
+                league_hard_hit_rate
+        )
+    else:
+        hard_hit_difference = None
+        hard_hit_rating = None
 
     avg_launch_angle = calculate_avg_launch_angle(player_data)
     barrel_rate = calculate_barrel_rate(player_data)
@@ -222,10 +279,17 @@ def generate_hitter_report(
     print(f"Plate appearances: {plate_appearances}")
     print(f"Batted Balls: {batted_ball_count}")
     print(f"Average EV: {avg_ev:.1f} mph")
-    print(
-        f"Hard-Hit Rate: {hard_hit_rate:.1f}% "
-        f"({hard_hit_difference:+.1f} pts vs benchmark, "
-        f"{hard_hit_rating})"
+    if league_hard_hit_rate is not None:
+        print(
+            f"Hard-Hit Rate: {hard_hit_rate:.1f}% "
+            f"(MLB: {league_hard_hit_rate:.1f}%, "
+            f"{hard_hit_difference:+.1f} pts, "
+            f"{hard_hit_rating})"
+        )
+    else:
+        print(
+            f"Hard-Hit Rate: {hard_hit_rate:.1f}% "
+            "(MLB benchmark unavailable)"
         )
     print(f"Barrel Rate: {barrel_rate:.1f}%")
     print(f"Average Launch Angle: {avg_launch_angle:.1f} degrees")
@@ -293,4 +357,5 @@ def main():
     )
 
 if __name__ == "__main__":
+    freeze_support()
     main()
